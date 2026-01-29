@@ -20,7 +20,6 @@ async function init() {
   updateTotalBar();
 }
 
-// ✅ Правильный формат даты (локальный)
 function formatDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -101,7 +100,9 @@ function renderCalendar() {
     const isCurrentMonth = date.getMonth() === currentMonth && date.getFullYear() === currentYear;
 
     const dayRecords = records.filter(r => r.date === dateStr);
-    const dotsCount = dayRecords.length > 3 ? 3 : dayRecords.length;
+    // Считаем общее число услуг в этот день
+    const totalServices = dayRecords.reduce((sum, r) => sum + (r.serviceIds?.length || 0), 0);
+    const dotsCount = totalServices > 3 ? 3 : totalServices;
 
     const dayEl = document.createElement('div');
     dayEl.className = 'day-cell';
@@ -111,7 +112,6 @@ function renderCalendar() {
     dayEl.textContent = date.getDate();
 
     if (isCurrentMonth) {
-      // ✅ Используем addEventListener — работает в PWA на iOS
       dayEl.addEventListener('click', () => openDayModal(dateStr));
       
       if (dotsCount > 0) {
@@ -152,15 +152,11 @@ function nextMonth() {
   updateTotalBar();
 }
 
-// ✅ Универсальная функция открытия модалки
 function openModal(htmlContent) {
   document.getElementById('modal-content').innerHTML = htmlContent;
   const modal = document.getElementById('modal');
   modal.style.display = 'flex';
-  // Небольшая задержка для запуска анимации
-  setTimeout(() => {
-    modal.classList.add('active');
-  }, 10);
+  setTimeout(() => modal.classList.add('active'), 10);
 }
 
 function openDayModal(dateStr) {
@@ -170,9 +166,12 @@ function openDayModal(dateStr) {
   const dateObj = new Date(dateStr);
   const formattedDate = `${dateObj.getDate()} ${monthNames[dateObj.getMonth()]}`;
 
+  // Доход за день: сумма всех услуг во всех записях
   const dayIncome = dayRecords.reduce((sum, r) => {
-    const service = getServiceById(r.serviceId);
-    return sum + service.price;
+    return sum + (r.serviceIds?.reduce((s, id) => {
+      const svc = getServiceById(id);
+      return s + svc.price;
+    }, 0) || 0);
   }, 0);
 
   let html = `<h3>${formattedDate}</h3>`;
@@ -180,33 +179,34 @@ function openDayModal(dateStr) {
 
   if (dayRecords.length > 0) {
     html += '<h4>Записи:</h4>';
-    dayRecords.forEach((r, idx) => {
+    dayRecords.forEach((r, recordIdx) => {
       const client = getClientById(r.clientId);
-      const service = getServiceById(r.serviceId);
-      const time = r.time || '—';
       const fullName = `${client.firstName} ${client.lastName}`.trim() || '—';
-      html += `
-        <div class="record-item">
-          <strong>${fullName}</strong> ${client.phone ? `(${client.phone})` : ''}<br>
-          Услуга: ${service.name}<br>
-          Сумма: ${service.price} ₽<br>
-          Время: ${time}<br>
-          ${r.comment ? `<small>${r.comment}</small>` : ''}
-          <div style="margin-top:6px;">
-            <button onclick="editRecord('${r.date}', ${idx})" style="background:#ff9500;padding:4px 8px;font-size:14px;margin-right:6px;">✏️</button>
-            <button onclick="deleteRecord('${r.date}', ${idx})" style="background:#ff3b30;padding:4px 8px;font-size:14px;">🗑</button>
+      const phonePart = client.phone ? `(${client.phone})` : '';
+      const time = r.time || '—';
+
+      // Каждая услуга — отдельный блок
+      r.serviceIds?.forEach((serviceId, serviceIdx) => {
+        const service = getServiceById(serviceId);
+        html += `
+          <div class="record-item">
+            <strong>${fullName}</strong> ${phonePart}<br>
+            Услуга: ${service.name}<br>
+            Сумма: ${service.price} ₽<br>
+            Время: ${time}<br>
+            ${r.comment ? `<small>${r.comment}</small>` : ''}
+            <div style="margin-top:6px;">
+              <button onclick="editRecord('${r.date}', ${recordIdx})" style="background:#ff9500;padding:4px 8px;font-size:14px;margin-right:6px;">✏️</button>
+              <button onclick="deleteRecord('${r.date}', ${recordIdx})" style="background:#ff3b30;padding:4px 8px;font-size:14px;">🗑</button>
+            </div>
           </div>
-        </div>
-      `;
+        `;
+      });
     });
   }
 
   sortServices();
   sortClients();
-
-  let serviceOptions = services.length > 0 
-    ? services.map(s => `<option value="${s.id}">${s.name} (${s.price} ₽)</option>`).join('')
-    : '<option>Добавьте услуги</option>';
 
   let clientOptions = clients.length > 0
     ? clients.map(c => {
@@ -215,17 +215,21 @@ function openDayModal(dateStr) {
       }).join('')
     : '<option>Добавьте клиентов</option>';
 
+  // Форма с возможностью нескольких услуг
   html += `
     <h4>Добавить запись</h4>
     <select id="new-client-id">
       ${clientOptions}
     </select>
-    <select id="new-service-id">
-      ${serviceOptions}
-    </select>
     <input type="time" id="new-time" />
     <textarea id="new-comment" placeholder="Комментарий"></textarea>
-    <button onclick="saveRecord('${dateStr}')">Сохранить</button>
+
+    <div id="service-list">
+      <!-- Услуги будут добавляться сюда -->
+    </div>
+
+    <button onclick="addServiceField()">➕ Добавить услугу</button>
+    <button onclick="saveMultiRecord('${dateStr}')">Сохранить</button>
     <button onclick="openClients()">👥 Клиенты</button>
     <button onclick="openServices()">🛠 Услуги</button>
     <button onclick="openStats()">📊 Статистика</button>
@@ -233,33 +237,63 @@ function openDayModal(dateStr) {
   `;
 
   openModal(html);
+
+  // Инициализация: первое поле услуги
+  addServiceField();
 }
 
-function saveRecord(dateStr) {
+// Добавление нового поля выбора услуги
+function addServiceField() {
+  sortServices();
+  let serviceOptions = services.length > 0 
+    ? services.map(s => `<option value="${s.id}">${s.name} (${s.price} ₽)</option>`).join('')
+    : '<option>Добавьте услуги</option>';
+
+  const container = document.getElementById('service-list');
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <select class="service-select" style="margin-top:8px;">
+      ${serviceOptions}
+    </select>
+  `;
+  container.appendChild(div);
+}
+
+function saveMultiRecord(dateStr) {
   const clientId = document.getElementById('new-client-id').value;
-  const serviceId = document.getElementById('new-service-id').value;
   const time = document.getElementById('new-time').value || null;
   const comment = document.getElementById('new-comment').value.trim();
+  const selects = document.querySelectorAll('.service-select');
+  const serviceIds = Array.from(selects)
+    .map(sel => sel.value)
+    .filter(id => id && services.some(s => s.id === id));
 
-  if (!clientId || !serviceId || clients.length === 0 || services.length === 0) {
-    alert('Выберите клиента и услугу');
+  if (!clientId || clients.length === 0) {
+    alert('Выберите клиента');
+    return;
+  }
+  if (serviceIds.length === 0) {
+    alert('Добавьте хотя бы одну услугу');
     return;
   }
 
-  const service = services.find(s => s.id === serviceId);
-  if (service) {
-    service.usageCount = (service.usageCount || 0) + 1;
-    saveServices();
-  }
+  // Увеличиваем счётчик использования для каждой услуги
+  serviceIds.forEach(id => {
+    const service = services.find(s => s.id === id);
+    if (service) {
+      service.usageCount = (service.usageCount || 0) + 1;
+    }
+  });
+  saveServices();
 
-  records.push({ date: dateStr, clientId, serviceId, time, comment });
+  records.push({ date: dateStr, clientId, serviceIds, time, comment });
   localforage.setItem('records', records);
   closeModal();
   renderCalendar();
   updateTotalBar();
 }
 
-// === РЕДАКТИРОВАНИЕ ЗАПИСИ ===
+// === РЕДАКТИРОВАНИЕ ЗАПИСИ (с несколькими услугами) ===
 function editRecord(dateStr, index) {
   const dayRecords = records.filter(r => r.date === dateStr);
   if (index >= dayRecords.length) return;
@@ -268,40 +302,59 @@ function editRecord(dateStr, index) {
   sortServices();
   sortClients();
 
-  let serviceOptions = services.map(s => 
-    `<option value="${s.id}" ${s.id === record.serviceId ? 'selected' : ''}>${s.name} (${s.price} ₽)</option>`
-  ).join('');
-
   let clientOptions = clients.map(c => {
     const name = `${c.firstName} ${c.lastName}`.trim();
     return `<option value="${c.id}" ${c.id === record.clientId ? 'selected' : ''}>${name} ${c.phone ? '(' + c.phone + ')' : ''}</option>`;
   }).join('');
+
+  let serviceOptions = services.map(s => 
+    `<option value="${s.id}">${s.name} (${s.price} ₽)</option>`
+  ).join('');
+
+  let serviceFields = '';
+  record.serviceIds?.forEach(id => {
+    serviceFields += `
+      <select class="service-select" style="margin-top:8px;">
+        ${serviceOptions.replace(`value="${id}"`, `value="${id}" selected`)}
+      </select>
+    `;
+  });
 
   let html = `
     <h3>✏️ Редактировать запись</h3>
     <select id="edit-client-id">
       ${clientOptions}
     </select>
-    <select id="edit-service-id">
-      ${serviceOptions}
-    </select>
     <input type="time" id="edit-time" value="${record.time || ''}" />
     <textarea id="edit-comment" placeholder="Комментарий">${record.comment || ''}</textarea>
-    <button onclick="saveEditedRecord('${dateStr}', ${index})">Сохранить</button>
+
+    <div id="service-list">
+      ${serviceFields}
+    </div>
+
+    <button onclick="addServiceField()">➕ Добавить услугу</button>
+    <button onclick="saveEditedMultiRecord('${dateStr}', ${index})">Сохранить</button>
     <button onclick="openDayModal('${dateStr}')">Отмена</button>
   `;
 
   openModal(html);
 }
 
-function saveEditedRecord(dateStr, index) {
+function saveEditedMultiRecord(dateStr, index) {
   const clientId = document.getElementById('edit-client-id').value;
-  const serviceId = document.getElementById('edit-service-id').value;
   const time = document.getElementById('edit-time').value || null;
   const comment = document.getElementById('edit-comment').value.trim();
+  const selects = document.querySelectorAll('.service-select');
+  const serviceIds = Array.from(selects)
+    .map(sel => sel.value)
+    .filter(id => id && services.some(s => s.id === id));
 
-  if (!clientId || !serviceId) {
-    alert('Выберите клиента и услугу');
+  if (!clientId) {
+    alert('Выберите клиента');
+    return;
+  }
+  if (serviceIds.length === 0) {
+    alert('Добавьте хотя бы одну услугу');
     return;
   }
 
@@ -312,12 +365,20 @@ function saveEditedRecord(dateStr, index) {
   records = records.filter(r => 
     !(r.date === dateStr && 
       r.clientId === target.clientId && 
-      r.serviceId === target.serviceId && 
+      JSON.stringify(r.serviceIds) === JSON.stringify(target.serviceIds) &&
       r.time === target.time)
   );
 
-  records.push({ date: dateStr, clientId, serviceId, time, comment });
+  // Обновляем счётчики
+  serviceIds.forEach(id => {
+    const service = services.find(s => s.id === id);
+    if (service) {
+      service.usageCount = (service.usageCount || 0) + 1;
+    }
+  });
+  saveServices();
 
+  records.push({ date: dateStr, clientId, serviceIds, time, comment });
   localforage.setItem('records', records);
   showNotification('Запись обновлена!');
   openDayModal(dateStr);
@@ -333,7 +394,7 @@ function deleteRecord(dateStr, index) {
   records = records.filter(r => 
     !(r.date === dateStr && 
       r.clientId === target.clientId && 
-      r.serviceId === target.serviceId && 
+      JSON.stringify(r.serviceIds) === JSON.stringify(target.serviceIds) &&
       r.time === target.time)
   );
 
@@ -342,7 +403,9 @@ function deleteRecord(dateStr, index) {
   openDayModal(dateStr);
 }
 
-// === КЛИЕНТЫ ===
+// === ОСТАЛЬНЫЕ ФУНКЦИИ (клиенты, услуги, статистика) — без изменений ===
+// ... (оставлены для полноты, но можно оставить как в предыдущей версии)
+
 function openClients() {
   sortClients();
   let listHtml = '';
@@ -468,7 +531,6 @@ async function deleteSelectedClients() {
   openClients();
 }
 
-// === УСЛУГИ ===
 function openServices() {
   sortServices();
   let listHtml = '';
@@ -564,7 +626,7 @@ async function saveEditedService(id) {
 async function deleteService(id) {
   if (!confirm('Удалить услугу и все её записи?')) return;
   services = services.filter(s => s.id !== id);
-  records = records.filter(r => r.serviceId !== id);
+  records = records.filter(r => r.serviceIds?.includes(id));
   await saveServices();
   localforage.setItem('records', records);
   openServices();
@@ -579,13 +641,12 @@ async function deleteSelectedServices() {
   }
   if (!confirm(`Удалить ${idsToDelete.length} услуг(у/и) и все связанные записи?`)) return;
   services = services.filter(s => !idsToDelete.includes(s.id));
-  records = records.filter(r => !idsToDelete.includes(r.serviceId));
+  records = records.filter(r => !r.serviceIds?.some(id => idsToDelete.includes(id)));
   await saveServices();
   localforage.setItem('records', records);
   openServices();
 }
 
-// === СТАТИСТИКА ===
 function openStats() {
   const monthly = {};
   const yearly = {};
@@ -594,18 +655,19 @@ function openStats() {
   records.forEach(r => {
     const ym = r.date.substring(0, 7);
     const year = r.date.substring(0, 4);
-    const service = getServiceById(r.serviceId);
 
     if (!monthly[ym]) monthly[ym] = { income: 0, services: {} };
     if (!yearly[year]) yearly[year] = { income: 0, services: {} };
 
-    monthly[ym].income += service.price;
-    yearly[year].income += service.price;
+    r.serviceIds?.forEach(id => {
+      const service = getServiceById(id);
+      monthly[ym].income += service.price;
+      yearly[year].income += service.price;
 
-    monthly[ym].services[r.serviceId] = (monthly[ym].services[r.serviceId] || 0) + 1;
-    yearly[year].services[r.serviceId] = (yearly[year].services[r.serviceId] || 0) + 1;
-
-    serviceUsage[r.serviceId] = (serviceUsage[r.serviceId] || 0) + 1;
+      monthly[ym].services[id] = (monthly[ym].services[id] || 0) + 1;
+      yearly[year].services[id] = (yearly[year].services[id] || 0) + 1;
+      serviceUsage[id] = (serviceUsage[id] || 0) + 1;
+    });
   });
 
   let topService = null;
@@ -667,7 +729,6 @@ function openStats() {
   openModal(html);
 }
 
-// ✅ Безопасное закрытие
 function closeModal(e) {
   const modal = document.getElementById('modal');
   if (e && e.target !== modal) return;
@@ -682,8 +743,10 @@ function updateTotalBar() {
   const monthIncome = records
     .filter(r => r.date.startsWith(monthKey))
     .reduce((sum, r) => {
-      const service = getServiceById(r.serviceId);
-      return sum + service.price;
+      return sum + (r.serviceIds?.reduce((s, id) => {
+        const svc = getServiceById(id);
+        return s + svc.price;
+      }, 0) || 0);
     }, 0);
 
   let totalBar = document.querySelector('.total-bar');
