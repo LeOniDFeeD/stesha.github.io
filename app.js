@@ -112,7 +112,10 @@ function renderCalendar() {
     dayEl.textContent = date.getDate();
 
     if (isCurrentMonth) {
-      dayEl.addEventListener('click', () => openDayModal(dateStr));
+      dayEl.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  openDayModal(dateStr);
+});
       
       if (dotsCount > 0) {
         const dots = document.createElement('div');
