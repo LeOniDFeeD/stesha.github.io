@@ -111,7 +111,7 @@ function renderCalendar() {
     dayEl.textContent = date.getDate();
 
     if (isCurrentMonth) {
-      // ✅ Клик работает напрямую
+      // ✅ Используем addEventListener — работает в PWA на iOS
       dayEl.addEventListener('click', () => openDayModal(dateStr));
       
       if (dotsCount > 0) {
