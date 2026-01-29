@@ -75,6 +75,7 @@ function sortRecordsByTime(records) {
   });
 }
 
+// ✅ ФИНАЛЬНАЯ ВЕРСИЯ renderCalendar с touchstart
 function renderCalendar() {
   const firstDay = new Date(currentYear, currentMonth, 1);
   const startDate = new Date(firstDay);
@@ -99,10 +100,22 @@ function renderCalendar() {
     const dateStr = formatDate(date);
     const isCurrentMonth = date.getMonth() === currentMonth && date.getFullYear() === currentYear;
 
-    const dayRecords = records.filter(r => r.date === dateStr);
-    // Считаем общее число услуг в этот день
-    const totalServices = dayRecords.reduce((sum, r) => sum + (r.serviceIds?.length || 0), 0);
-    const dotsCount = totalServices > 3 ? 3 : totalServices;
+    let dayRecords = [];
+    let totalServices = 0;
+    let dotsCount = 0;
+
+    if (Array.isArray(records)) {
+      dayRecords = records.filter(r => r && r.date === dateStr);
+      totalServices = dayRecords.reduce((sum, r) => {
+        if (r.serviceIds && Array.isArray(r.serviceIds)) {
+          return sum + r.serviceIds.length;
+        } else if (r.serviceId) {
+          return sum + 1;
+        }
+        return sum;
+      }, 0);
+      dotsCount = totalServices > 3 ? 3 : totalServices;
+    }
 
     const dayEl = document.createElement('div');
     dayEl.className = 'day-cell';
@@ -112,11 +125,12 @@ function renderCalendar() {
     dayEl.textContent = date.getDate();
 
     if (isCurrentMonth) {
+      // ✅ Ключевое исправление для iOS PWA
       dayEl.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  openDayModal(dateStr);
-});
-      
+        e.preventDefault();
+        openDayModal(dateStr);
+      });
+
       if (dotsCount > 0) {
         const dots = document.createElement('div');
         dots.className = 'dots';
@@ -163,19 +177,24 @@ function openModal(htmlContent) {
 }
 
 function openDayModal(dateStr) {
-  let dayRecords = records.filter(r => r.date === dateStr);
+  let dayRecords = Array.isArray(records) ? records.filter(r => r && r.date === dateStr) : [];
   dayRecords = sortRecordsByTime([...dayRecords]);
 
   const dateObj = new Date(dateStr);
   const formattedDate = `${dateObj.getDate()} ${monthNames[dateObj.getMonth()]}`;
 
-  // Доход за день: сумма всех услуг во всех записях
-  const dayIncome = dayRecords.reduce((sum, r) => {
-    return sum + (r.serviceIds?.reduce((s, id) => {
-      const svc = getServiceById(id);
-      return s + svc.price;
-    }, 0) || 0);
-  }, 0);
+  let dayIncome = 0;
+  dayRecords.forEach(r => {
+    if (r.serviceIds && Array.isArray(r.serviceIds)) {
+      r.serviceIds.forEach(id => {
+        const svc = getServiceById(id);
+        dayIncome += svc.price;
+      });
+    } else if (r.serviceId) {
+      const svc = getServiceById(r.serviceId);
+      dayIncome += svc.price;
+    }
+  });
 
   let html = `<h3>${formattedDate}</h3>`;
   html += `<p><strong>Доход за день: ${dayIncome.toFixed(0)} ₽</strong></p>`;
@@ -188,9 +207,25 @@ function openDayModal(dateStr) {
       const phonePart = client.phone ? `(${client.phone})` : '';
       const time = r.time || '—';
 
-      // Каждая услуга — отдельный блок
-      r.serviceIds?.forEach((serviceId, serviceIdx) => {
-        const service = getServiceById(serviceId);
+      if (r.serviceIds && Array.isArray(r.serviceIds)) {
+        r.serviceIds.forEach(serviceId => {
+          const service = getServiceById(serviceId);
+          html += `
+            <div class="record-item">
+              <strong>${fullName}</strong> ${phonePart}<br>
+              Услуга: ${service.name}<br>
+              Сумма: ${service.price} ₽<br>
+              Время: ${time}<br>
+              ${r.comment ? `<small>${r.comment}</small>` : ''}
+              <div style="margin-top:6px;">
+                <button onclick="editRecord('${r.date}', ${recordIdx})" style="background:#ff9500;padding:4px 8px;font-size:14px;margin-right:6px;">✏️</button>
+                <button onclick="deleteRecord('${r.date}', ${recordIdx})" style="background:#ff3b30;padding:4px 8px;font-size:14px;">🗑</button>
+              </div>
+            </div>
+          `;
+        });
+      } else if (r.serviceId) {
+        const service = getServiceById(r.serviceId);
         html += `
           <div class="record-item">
             <strong>${fullName}</strong> ${phonePart}<br>
@@ -204,7 +239,7 @@ function openDayModal(dateStr) {
             </div>
           </div>
         `;
-      });
+      }
     });
   }
 
@@ -218,7 +253,6 @@ function openDayModal(dateStr) {
       }).join('')
     : '<option>Добавьте клиентов</option>';
 
-  // Форма с возможностью нескольких услуг
   html += `
     <h4>Добавить запись</h4>
     <select id="new-client-id">
@@ -228,7 +262,6 @@ function openDayModal(dateStr) {
     <textarea id="new-comment" placeholder="Комментарий"></textarea>
 
     <div id="service-list">
-      <!-- Услуги будут добавляться сюда -->
     </div>
 
     <button onclick="addServiceField()">➕ Добавить услугу</button>
@@ -240,12 +273,9 @@ function openDayModal(dateStr) {
   `;
 
   openModal(html);
-
-  // Инициализация: первое поле услуги
   addServiceField();
 }
 
-// Добавление нового поля выбора услуги
 function addServiceField() {
   sortServices();
   let serviceOptions = services.length > 0 
@@ -254,11 +284,7 @@ function addServiceField() {
 
   const container = document.getElementById('service-list');
   const div = document.createElement('div');
-  div.innerHTML = `
-    <select class="service-select" style="margin-top:8px;">
-      ${serviceOptions}
-    </select>
-  `;
+  div.innerHTML = `<select class="service-select" style="margin-top:8px;">${serviceOptions}</select>`;
   container.appendChild(div);
 }
 
@@ -280,7 +306,6 @@ function saveMultiRecord(dateStr) {
     return;
   }
 
-  // Увеличиваем счётчик использования для каждой услуги
   serviceIds.forEach(id => {
     const service = services.find(s => s.id === id);
     if (service) {
@@ -296,7 +321,6 @@ function saveMultiRecord(dateStr) {
   updateTotalBar();
 }
 
-// === РЕДАКТИРОВАНИЕ ЗАПИСИ (с несколькими услугами) ===
 function editRecord(dateStr, index) {
   const dayRecords = records.filter(r => r.date === dateStr);
   if (index >= dayRecords.length) return;
@@ -315,7 +339,8 @@ function editRecord(dateStr, index) {
   ).join('');
 
   let serviceFields = '';
-  record.serviceIds?.forEach(id => {
+  const ids = record.serviceIds || (record.serviceId ? [record.serviceId] : []);
+  ids.forEach(id => {
     serviceFields += `
       <select class="service-select" style="margin-top:8px;">
         ${serviceOptions.replace(`value="${id}"`, `value="${id}" selected`)}
@@ -368,11 +393,10 @@ function saveEditedMultiRecord(dateStr, index) {
   records = records.filter(r => 
     !(r.date === dateStr && 
       r.clientId === target.clientId && 
-      JSON.stringify(r.serviceIds) === JSON.stringify(target.serviceIds) &&
+      JSON.stringify(r.serviceIds || r.serviceId) === JSON.stringify(target.serviceIds || target.serviceId) &&
       r.time === target.time)
   );
 
-  // Обновляем счётчики
   serviceIds.forEach(id => {
     const service = services.find(s => s.id === id);
     if (service) {
@@ -397,7 +421,7 @@ function deleteRecord(dateStr, index) {
   records = records.filter(r => 
     !(r.date === dateStr && 
       r.clientId === target.clientId && 
-      JSON.stringify(r.serviceIds) === JSON.stringify(target.serviceIds) &&
+      JSON.stringify(r.serviceIds || r.serviceId) === JSON.stringify(target.serviceIds || target.serviceId) &&
       r.time === target.time)
   );
 
@@ -406,9 +430,7 @@ function deleteRecord(dateStr, index) {
   openDayModal(dateStr);
 }
 
-// === ОСТАЛЬНЫЕ ФУНКЦИИ (клиенты, услуги, статистика) — без изменений ===
-// ... (оставлены для полноты, но можно оставить как в предыдущей версии)
-
+// === КЛИЕНТЫ ===
 function openClients() {
   sortClients();
   let listHtml = '';
@@ -534,6 +556,7 @@ async function deleteSelectedClients() {
   openClients();
 }
 
+// === УСЛУГИ ===
 function openServices() {
   sortServices();
   let listHtml = '';
@@ -629,7 +652,11 @@ async function saveEditedService(id) {
 async function deleteService(id) {
   if (!confirm('Удалить услугу и все её записи?')) return;
   services = services.filter(s => s.id !== id);
-  records = records.filter(r => r.serviceIds?.includes(id));
+  records = records.filter(r => {
+    if (r.serviceIds && r.serviceIds.includes(id)) return false;
+    if (r.serviceId === id) return false;
+    return true;
+  });
   await saveServices();
   localforage.setItem('records', records);
   openServices();
@@ -644,12 +671,17 @@ async function deleteSelectedServices() {
   }
   if (!confirm(`Удалить ${idsToDelete.length} услуг(у/и) и все связанные записи?`)) return;
   services = services.filter(s => !idsToDelete.includes(s.id));
-  records = records.filter(r => !r.serviceIds?.some(id => idsToDelete.includes(id)));
+  records = records.filter(r => {
+    if (r.serviceIds && r.serviceIds.some(id => idsToDelete.includes(id))) return false;
+    if (r.serviceId && idsToDelete.includes(r.serviceId)) return false;
+    return true;
+  });
   await saveServices();
   localforage.setItem('records', records);
   openServices();
 }
 
+// === СТАТИСТИКА ===
 function openStats() {
   const monthly = {};
   const yearly = {};
@@ -662,7 +694,8 @@ function openStats() {
     if (!monthly[ym]) monthly[ym] = { income: 0, services: {} };
     if (!yearly[year]) yearly[year] = { income: 0, services: {} };
 
-    r.serviceIds?.forEach(id => {
+    const ids = r.serviceIds || (r.serviceId ? [r.serviceId] : []);
+    ids.forEach(id => {
       const service = getServiceById(id);
       monthly[ym].income += service.price;
       yearly[year].income += service.price;
@@ -743,14 +776,20 @@ function closeModal(e) {
 
 function updateTotalBar() {
   const monthKey = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`;
-  const monthIncome = records
-    .filter(r => r.date.startsWith(monthKey))
-    .reduce((sum, r) => {
-      return sum + (r.serviceIds?.reduce((s, id) => {
-        const svc = getServiceById(id);
-        return s + svc.price;
-      }, 0) || 0);
-    }, 0);
+  let monthIncome = 0;
+  records.forEach(r => {
+    if (r.date.startsWith(monthKey)) {
+      if (r.serviceIds && Array.isArray(r.serviceIds)) {
+        r.serviceIds.forEach(id => {
+          const svc = getServiceById(id);
+          monthIncome += svc.price;
+        });
+      } else if (r.serviceId) {
+        const svc = getServiceById(r.serviceId);
+        monthIncome += svc.price;
+      }
+    }
+  });
 
   let totalBar = document.querySelector('.total-bar');
   if (!totalBar) {
